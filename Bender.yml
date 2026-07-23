@@ -47,3 +47,7 @@ sources:
     - tb/jtag_dmi/jtag_test.sv
     # Level 3
     - tb/jtag_dmi/tb_jtag_dmi.sv
+
+  - target: dm_mem_test
+    files:
+    - tb/dm_mem/tb_dm_mem.sv

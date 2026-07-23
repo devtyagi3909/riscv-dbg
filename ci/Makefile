@@ -11,9 +11,9 @@ TB := $(ROOT)/tb
 NUM_JOBS ?= 2
 OPENOCD_PREFIX ?= $(ROOT)/.cache/openocd
 
-.PHONY: all compliance firmware full-model jtag-dmi openocd
+.PHONY: all compliance dm-mem firmware full-model jtag-dmi openocd
 
-all: jtag-dmi compliance
+all: dm-mem jtag-dmi compliance
 
 full-model:
 	$(MAKE) -C $(TB) -j1 download_deps
@@ -29,6 +29,10 @@ openocd:
 jtag-dmi:
 	JTAG_BUILD_DIR=$(ROOT)/build/jtag-verilator \
 		$(ROOT)/ci/run-jtag-verilator.sh
+
+dm-mem:
+	DM_MEM_BUILD_DIR=$(ROOT)/build/dm-mem-verilator \
+		$(ROOT)/ci/run-dm-mem-verilator.sh
 
 compliance: full-model firmware openocd
 	cd $(TB) && \
