@@ -1,0 +1,54 @@
+# Copyright 2026 ETH Zurich and University of Bologna.
+# Solderpad Hardware License, Version 0.51, see LICENSE for details.
+# SPDX-License-Identifier: SHL-0.51
+#
+# Authors:
+# - Philippe Sauter <phsauter@iis.ee.ethz.ch>
+
+name: simulation
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verilator:
+    name: Verilator regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: ghcr.io/phsauter/oseda-cli:2026.07
+      options: --user 0
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Install runtime dependencies
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends \
+            autoconf \
+            automake \
+            libtool \
+            z3
+          rm -rf /var/lib/apt/lists/*
+      - name: Cache OpenOCD
+        uses: actions/cache@v5
+        with:
+          path: .cache/openocd
+          key: riscv-openocd-a88cc98a045cc11d094010878f1880fe3fbc733f
+      - name: Report tool versions
+        shell: bash
+        run: |
+          verilator --version
+          bender --version
+          riscv64-unknown-elf-gcc --version
+          z3 --version
+      - name: Run JTAG and compliance regressions
+        shell: bash
+        run: make -C ci -j2 NUM_JOBS=2 all
