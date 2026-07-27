@@ -59,6 +59,7 @@ module dm_mem #(
   output logic [BusWidth-1:0]              rdata_o
 );
   localparam int unsigned DbgAddressBits = 12;
+  localparam int unsigned DataIndexWidth = $clog2(dm::DataCount);
   localparam int unsigned HartSelLen     = (NrHarts == 1) ? 1 : $clog2(NrHarts);
   localparam int unsigned NrHartsAligned = 2**HartSelLen;
   localparam int unsigned MaxAar         = (BusWidth == 64) ? 4 : 3;
@@ -95,26 +96,24 @@ module dm_mem #(
   logic [63:0] rdata_d, rdata_q;
   logic        word_enable32_q;
 
-  // this is needed to avoid lint warnings related to array indexing
-  // resize hartsel to valid range
   logic [HartSelLen-1:0] hartsel, wdata_hartsel;
+  logic                  hartsel_valid, wdata_hartsel_valid;
 
-  assign hartsel       = hartsel_i[HartSelLen-1:0];
-  assign wdata_hartsel = wdata_i[HartSelLen-1:0];
+  assign hartsel             = hartsel_i[HartSelLen-1:0];
+  assign wdata_hartsel       = wdata_i[HartSelLen-1:0];
+  assign hartsel_valid       = hartsel <= HartSelLen'(NrHarts - 1);
+  assign wdata_hartsel_valid = wdata_hartsel <= HartSelLen'(NrHarts - 1);
 
   logic [NrHartsAligned-1:0] resumereq_aligned, haltreq_aligned,
-                             halted_d_aligned, halted_q_aligned,
-                             halted_aligned, resumereq_wdata_aligned,
-                             resuming_d_aligned, resuming_q_aligned;
+                             halted_q_aligned, halted_aligned,
+                             resumereq_wdata_aligned, resuming_q_aligned;
 
   assign resumereq_aligned       = NrHartsAligned'(resumereq_i);
   assign haltreq_aligned         = NrHartsAligned'(haltreq_i);
   assign resumereq_wdata_aligned = NrHartsAligned'(resumereq_i);
 
   assign halted_q_aligned        = NrHartsAligned'(halted_q);
-  assign halted_d                = NrHarts'(halted_d_aligned);
   assign resuming_q_aligned      = NrHartsAligned'(resuming_q);
-  assign resuming_d              = NrHarts'(resuming_d_aligned);
 
   // distinguish whether we need to forward data from the ROM or the FSM
   // latch the address for this
@@ -223,25 +222,66 @@ module dm_mem #(
 
   // read/write logic
   logic [dm::DataCount-1:0][31:0] data_bits;
+  logic [DataIndexWidth-1:0] data_reg_idx;
   logic [7:0][7:0] rdata;
+
+  // Forward writes from the hart to the abstract data registers.
+  // VCS Xprop cannot instrument case-inside range items (see PR #150).
+  always_comb (* xprop_off *) begin : p_data_write
+    data_bits    = data_i;
+    data_reg_idx = DataIndexWidth'(
+        addr_i[DbgAddressBits-1:2] - DataBaseAddr[DbgAddressBits-1:2]
+    );
+    data_valid_o = 1'b0;
+
+    if (req_i && we_i) begin
+      unique case (addr_i[DbgAddressBits-1:0]) inside
+        [DataBaseAddr:DataEndAddr]: begin
+          data_valid_o = 1'b1;
+          for (int unsigned byte_idx = 0; byte_idx < $bits(be_i); byte_idx++) begin
+            if (be_i[byte_idx] &&
+                (data_reg_idx + byte_idx / 4) < dm::DataCount) begin
+              data_bits[data_reg_idx + byte_idx / 4][(byte_idx % 4) * 8 +: 8] =
+                  wdata_i[byte_idx * 8 +: 8];
+            end
+          end
+        end
+        default: ;
+      endcase
+    end
+
+    data_o = data_bits;
+  end
+
+  // Track resume acknowledgements. Memory writes take precedence over a clear request.
+  always_comb begin : p_resuming
+    resuming_d = resuming_q;
+
+    if (clear_resumeack_i && hartsel_valid) begin
+      resuming_d[hartsel] = 1'b0;
+    end
+
+    if (req_i && we_i && addr_i[DbgAddressBits-1:0] == ResumingAddr &&
+        wdata_hartsel_valid) begin
+      resuming_d[wdata_hartsel] = 1'b1;
+    end
+
+    if (ndmreset_i) begin
+      resuming_d = '0;
+    end
+  end
+
+  // VCS Xprop cannot instrument case-inside range items (see PR #150).
   always_comb (* xprop_off *) begin : p_rw_logic
 
-    halted_d_aligned   = NrHartsAligned'(halted_q);
-    resuming_d_aligned = NrHartsAligned'(resuming_q);
-    rdata_d        = rdata_q;
-    data_bits      = data_i;
-    rdata          = '0;
+    halted_d = halted_q;
+    rdata_d  = rdata_q;
+    rdata    = '0;
 
-    // write data in csr register
-    data_valid_o   = 1'b0;
     exception      = 1'b0;
-    halted_aligned     = '0;
+    halted_aligned = '0;
     going          = 1'b0;
 
-    // The resume ack signal is lowered when the resume request is deasserted
-    if (clear_resumeack_i) begin
-      resuming_d_aligned[hartsel] = 1'b0;
-    end
     // we've got a new request
     if (req_i) begin
       // this is a write
@@ -249,38 +289,21 @@ module dm_mem #(
         unique case (addr_i[DbgAddressBits-1:0]) inside
           HaltedAddr: begin
             halted_aligned[wdata_hartsel] = 1'b1;
-            halted_d_aligned[wdata_hartsel] = 1'b1;
+            if (wdata_hartsel_valid) begin
+              halted_d[wdata_hartsel] = 1'b1;
+            end
           end
           GoingAddr: begin
             going = 1'b1;
           end
           ResumingAddr: begin
             // clear the halted flag as the hart resumed execution
-            halted_d_aligned[wdata_hartsel] = 1'b0;
-            // set the resuming flag which needs to be cleared by the debugger
-            resuming_d_aligned[wdata_hartsel] = 1'b1;
+            if (wdata_hartsel_valid) begin
+              halted_d[wdata_hartsel] = 1'b0;
+            end
           end
           // an exception occurred during execution
           ExceptionAddr: exception = 1'b1;
-          // core can write data registers
-          [DataBaseAddr:DataEndAddr]: begin
-            data_valid_o = 1'b1;
-            for (int dc = 0; dc < dm::DataCount; dc++) begin
-              if ((addr_i[DbgAddressBits-1:2] - DataBaseAddr[DbgAddressBits-1:2]) == dc) begin
-                for (int i = 0; i < $bits(be_i); i++) begin
-                  if (be_i[i]) begin
-                    if (i>3) begin // for upper 32bit data write (only used for BusWidth ==  64)
-                      if ((dc+1) < dm::DataCount) begin // ensure we write to an implemented data register
-                        data_bits[dc+1][(i-4)*8+:8] = wdata_i[i*8+:8];
-                      end
-                    end else begin // for lower 32bit data write
-                      data_bits[dc][i*8+:8] = wdata_i[i*8+:8];
-                    end
-                  end
-                end
-              end
-            end
-          end
           default ;
         endcase
 
@@ -310,8 +333,12 @@ module dm_mem #(
 
           [DataBaseAddr:DataEndAddr]: begin
             rdata_d = {
-                      data_i[$clog2(dm::DataCount)'(((addr_i[DbgAddressBits-1:3] - DataBaseAddr[DbgAddressBits-1:3]) << 1) + 1'b1)],
-                      data_i[$clog2(dm::DataCount)'(((addr_i[DbgAddressBits-1:3] - DataBaseAddr[DbgAddressBits-1:3]) << 1))]
+                      data_i[DataIndexWidth'(
+                          ((addr_i[DbgAddressBits-1:3] -
+                            DataBaseAddr[DbgAddressBits-1:3]) << 1) + 1'b1)],
+                      data_i[DataIndexWidth'(
+                          ((addr_i[DbgAddressBits-1:3] -
+                            DataBaseAddr[DbgAddressBits-1:3]) << 1))]
                       };
           end
 
@@ -341,12 +368,9 @@ module dm_mem #(
     end
 
     if (ndmreset_i) begin
-      // When harts are reset, they are neither halted nor resuming.
-      halted_d_aligned   = '0;
-      resuming_d_aligned = '0;
+      // When harts are reset, they are not halted.
+      halted_d = '0;
     end
-
-    data_o = data_bits;
   end
 
   always_comb begin : p_abstract_cmd_rom

@@ -134,7 +134,12 @@ package jtag_test;
     parameter time TT = 0ns  // stimuli test time
   );
 
-    typedef jtag_test::jtag_driver#(.IrLength(IrLength), .IDCODE(IDCODE), .TA(TA), .TT(TT)) jtag_driver_t;
+    typedef jtag_test::jtag_driver #(
+      .IrLength (IrLength),
+      .IDCODE   (IDCODE),
+      .TA       (TA),
+      .TT       (TT)
+    ) jtag_driver_t;
     jtag_driver_t jtag;
 
     localparam int unsigned DMIWidth = $bits(dm::dmi_req_t);

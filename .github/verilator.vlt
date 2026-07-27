@@ -1,0 +1,27 @@
+// Copyright 2026 ETH Zurich and University of Bologna.
+// Solderpad Hardware License, Version 0.51, see LICENSE for details.
+// SPDX-License-Identifier: SHL-0.51
+//
+// Authors:
+// - Philippe Sauter <phsauter@iis.ee.ethz.ch>
+
+`verilator_config
+
+// Dependencies are linted in their own repositories.
+lint_off -file "*.bender/*"
+
+// The public package name and file path are kept for downstream compatibility.
+lint_off -rule DECLFILENAME -file "*src/dm_pkg.sv"
+// These package constants form part of the public API but are unused by this lint top.
+lint_off -rule UNUSEDPARAM -file "*src/dm_pkg.sv"
+
+// Preserve the public helper signatures; JAL and AUIPC immediates are aligned, so bit zero is not encoded.
+lint_off -rule UNUSEDSIGNAL -file "*src/dm_pkg.sv" -match "Bits of function variable are not used: 'imm'[0]*"
+// Keep the public port until dmactive SBA reset behavior is resolved.
+lint_off -rule UNUSEDSIGNAL -file "*src/dm_sba.sv" -match "Signal is not used: 'dmactive_i'*"
+// Preserve the specification-sized public hart selector; the default one-hart configuration only uses bit zero.
+lint_off -rule UNUSEDSIGNAL -file "*src/dm_mem.sv" -match "Bits of signal are not used: 'hartsel_i'[19:1]*"
+// Bit 23 is reserved in the Access Register command encoding.
+lint_off -rule UNUSEDSIGNAL -file "*src/dm_mem.sv" -match "Bits of signal are not used: 'ac_ar'[23]*"
+// Preserve the generic 64-bit ROM address port; the ROM is naturally word-aligned and occupies fewer address bits.
+lint_off -rule UNUSEDSIGNAL -file "*debug_rom/debug_rom.sv" -match "Bits of signal are not used: 'addr_i'[63:8,2:0]*"

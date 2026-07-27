@@ -1,0 +1,18 @@
+# Copyright 2026 ETH Zurich and University of Bologna.
+# Solderpad Hardware License, Version 0.51, see LICENSE for details.
+# SPDX-License-Identifier: SHL-0.51
+#
+# Authors:
+# - Philippe Sauter <phsauter@iis.ee.ethz.ch>
+
+# Keep the module name stable because the BSCANE implementation intentionally provides the same module as dmi_jtag_tap.sv.
+waive --rule=module-filename --location="src/dmi_bscane_tap.sv"
+# DMI_BUS_DV is consumed by downstream verification environments.
+waive --rule=interface-name-style --location="src/dmi_intf.sv"
+# JTAG_DV is instantiated directly by downstream testbenches.
+waive --rule=interface-name-style --location="tb/jtag_dmi/jtag_dv.sv"
+
+# These are intentionally valueless command-line flags such as +verbose and +vcd.
+waive --rule=plusarg-assignment --location="tb/dp_ram.sv"
+waive --rule=plusarg-assignment --location="tb/mm_ram.sv"
+waive --rule=plusarg-assignment --location="tb/tb_top.sv"

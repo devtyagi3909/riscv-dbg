@@ -82,6 +82,7 @@ module dm_csrs #(
   input  logic [2:0]                        sberror_i // bus error occurred
 );
   // the amount of bits we need to represent all harts
+  localparam int unsigned DataIndexWidth = $clog2(dm::DataCount);
   localparam int unsigned HartSelLen = (NrHarts == 1) ? 1 : $clog2(NrHarts);
   localparam int unsigned NrHartsAligned = 2**HartSelLen;
 
@@ -176,9 +177,10 @@ module dm_csrs #(
   logic [NrHarts-1:0] havereset_d, havereset_q;
   // program buffer
   logic [dm::ProgBufSize-1:0][31:0] progbuf_d, progbuf_q;
-  logic [dm::DataCount-1:0][31:0] data_d, data_q;
+  logic [dm::DataCount-1:0][31:0] data_d, data_d_dmi, data_q;
 
   logic [HartSelLen-1:0] selected_hart;
+  logic                  selected_hart_valid;
 
   dm::dmi_resp_t resp_queue_inp;
 
@@ -193,17 +195,16 @@ module dm_csrs #(
   assign sbdata_o          = sbdata_q[BusWidth-1:0];
   assign sbaddress_o       = sbaddr_q[BusWidth-1:0];
 
-  assign hartsel_o         = {dmcontrol_q.hartselhi, dmcontrol_q.hartsello};
+  assign hartsel_o           = {dmcontrol_q.hartselhi, dmcontrol_q.hartsello};
+  assign selected_hart       = hartsel_o[HartSelLen-1:0];
+  assign selected_hart_valid = selected_hart <= HartSelLen'(NrHarts - 1);
 
-  // needed to avoid lint warnings
-  logic [NrHartsAligned-1:0] havereset_d_aligned, havereset_q_aligned,
-                             resumeack_aligned, unavailable_aligned,
+  logic [NrHartsAligned-1:0] havereset_q_aligned, resumeack_aligned, unavailable_aligned,
                              halted_aligned;
   assign resumeack_aligned   = NrHartsAligned'(resumeack_i);
   assign unavailable_aligned = NrHartsAligned'(unavailable_i);
   assign halted_aligned      = NrHartsAligned'(halted_i);
 
-  assign havereset_d         = NrHarts'(havereset_d_aligned);
   assign havereset_q_aligned = NrHartsAligned'(havereset_q);
 
   dm::hartinfo_t [NrHartsAligned-1:0] hartinfo_aligned;
@@ -215,7 +216,6 @@ module dm_csrs #(
   // helper variables
   dm::dm_csr_e dm_csr_addr;
   dm::sbcs_t sbcs;
-  dm::abstractcs_t a_abstractcs;
   logic [3:0] autoexecdata_idx; // 0 == Data0 ... 11 == Data11
 
   // Get the data index, i.e. 0 for dm::Data0 up to 11 for dm::Data11
@@ -270,12 +270,12 @@ module dm_csrs #(
     abstractauto_d.zero0 = '0;
 
     // default assignments
-    havereset_d_aligned = NrHartsAligned'(havereset_q);
+    havereset_d         = havereset_q;
     dmcontrol_d         = dmcontrol_q;
     cmderr_d            = cmderr_q;
     command_d           = command_q;
     progbuf_d           = progbuf_q;
-    data_d              = data_q;
+    data_d_dmi          = data_q;
     sbcs_d              = sbcs_q;
     sbaddr_d            = 64'(sbaddress_i);
     sbdata_d            = sbdata_q;
@@ -289,14 +289,13 @@ module dm_csrs #(
     clear_resumeack_o       = 1'b0;
 
     // helper variables
-    sbcs         = '0;
-    a_abstractcs = '0;
+    sbcs = '0;
 
     // reads
     if (dmi_req_ready_o && dmi_req_valid_i && dtm_op == dm::DTM_READ) begin
       unique case (dm_csr_addr) inside
         [(dm::Data0):DataEnd]: begin
-          resp_queue_inp.data = data_q[$clog2(dm::DataCount)'(autoexecdata_idx)];
+          resp_queue_inp.data = data_q[DataIndexWidth'(autoexecdata_idx)];
           if (!cmdbusy_i) begin
             // check whether we need to re-execute the command (just give a cmd_valid)
             cmd_valid_d = abstractauto_q.autoexecdata[autoexecdata_idx];
@@ -373,7 +372,7 @@ module dm_csrs #(
           if (dm::DataCount > 0) begin
             // attempts to write them while busy is set does not change their value
             if (!cmdbusy_i) begin
-              data_d[dmi_req_i.addr[$clog2(dm::DataCount)-1:0]] = dmi_req_i.data;
+              data_d_dmi[dmi_req_i.addr[DataIndexWidth-1:0]] = dmi_req_i.data;
               // check whether we need to re-execute the command (just give a cmd_valid)
               cmd_valid_d = abstractauto_q.autoexecdata[autoexecdata_idx];
             //An abstract command was executing while one of the data registers was written
@@ -388,8 +387,8 @@ module dm_csrs #(
         dm::DMControl: begin
           dmcontrol_d = dmi_req_i.data;
           // clear the havreset of the selected hart
-          if (dmcontrol_d.ackhavereset) begin
-            havereset_d_aligned[selected_hart] = 1'b0;
+          if (dmcontrol_d.ackhavereset && selected_hart_valid) begin
+            havereset_d[selected_hart] = 1'b0;
           end
         end
         dm::DMStatus:; // write are ignored to R/O register
@@ -400,10 +399,9 @@ module dm_csrs #(
           // field remain set until they are cleared by writing 1 to
           // them. No abstract command is started until the value is
           // reset to 0.
-          a_abstractcs = dm::abstractcs_t'(dmi_req_i.data);
           // reads during abstract command execution are not allowed
           if (!cmdbusy_i) begin
-            cmderr_d = dm::cmderr_e'(~a_abstractcs.cmderr & cmderr_q);
+            cmderr_d = dm::cmderr_e'(~dmi_req_i.data[10:8] & cmderr_q);
           end else begin
             resp_queue_inp.resp = dm::DTM_BUSY;
             if (cmderr_q == dm::CmdErrNone) begin
@@ -515,14 +513,9 @@ module dm_csrs #(
       cmderr_d = cmderror_i;
     end
 
-    // update data registers
-    if (data_valid_i) begin
-      data_d = data_i;
-    end
-
     // set the havereset flag when the ndmreset completed
     if (ndmreset_ack_i) begin
-      havereset_d_aligned[NrHarts-1:0] = '1;
+      havereset_d = '1;
     end
     // -------------
     // System Bus
@@ -567,13 +560,15 @@ module dm_csrs #(
     sbcs_d.sbaccess8            = logic'(BusWidth >= 32'd8);
   end
 
+  // Hart writes take precedence over DMI writes to the abstract data registers.
+  assign data_d = data_valid_i ? data_i : data_d_dmi;
+
   // output multiplexer
   always_comb begin : p_outmux
-    selected_hart = hartsel_o[HartSelLen-1:0];
     // default assignment
     haltreq_o = '0;
     resumereq_o = '0;
-    if (selected_hart <= HartSelLen'(NrHarts-1)) begin
+    if (selected_hart_valid) begin
       haltreq_o[selected_hart]   = dmcontrol_q.haltreq;
       resumereq_o[selected_hart] = dmcontrol_q.resumereq;
     end

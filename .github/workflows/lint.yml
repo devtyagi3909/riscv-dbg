@@ -1,0 +1,113 @@
+# Copyright 2026 ETH Zurich and University of Bologna.
+# Solderpad Hardware License, Version 0.51, see LICENSE for details.
+# SPDX-License-Identifier: SHL-0.51
+#
+# Authors:
+# - Philippe Sauter <phsauter@iis.ee.ethz.ch>
+
+name: lint
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  license:
+    name: License
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Check license notices
+        run: ci/check-license.sh
+
+  slang:
+    name: Slang elaboration
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Install Bender
+        uses: pulp-platform/pulp-actions/bender-install@v2.5.1
+      - name: Generate source list
+        run: |
+          bender checkout
+          bender script flist-plus -t riscv-dbg:lint \
+            -t tech_cells_generic:tech_cells_generic_exclude_deprecated \
+            --relative-path > sources.flist
+      - name: Run Slang elaboration
+        uses: pulp-platform/pulp-actions/slang@v2.5.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          reviewdog-name: slang-elaboration
+          slang-flags: "--top dm_obi_top -f sources.flist"
+
+  verible:
+    name: Verible lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Install Verible
+        run: |
+          set -euo pipefail
+          verible_version="v0.0-4080-ga0a8d8eb"
+          install_dir="${RUNNER_TEMP}/verible"
+          mkdir -p "${install_dir}"
+          curl -fsSL \
+            "https://github.com/chipsalliance/verible/releases/download/${verible_version}/verible-${verible_version}-linux-static-x86_64.tar.gz" \
+            | tar -xz -C "${install_dir}" --strip-components=1
+          echo "${install_dir}/bin" >> "${GITHUB_PATH}"
+      - name: Add Verible problem matcher
+        run: echo "::add-matcher::.github/verible-lint-matcher.json"
+      - name: Run Verible lint
+        run: .github/scripts/run_verible_lint.sh
+      - name: Remove Verible problem matcher
+        if: always()
+        run: echo "::remove-matcher owner=verible-lint-matcher::"
+
+  language:
+    name: Python and Tcl lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+      - name: Run Ruff
+        run: uvx --from ruff==0.16.0 ruff check debug_rom/gen_rom.py tb/veri-run-openocd.py
+      - name: Run tclint
+        run: uvx --from tclint==0.4.2 tclint tb/vsim_batch.tcl tb/vsim_gui.tcl
+
+  verilator:
+    name: Verilator lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Install Verilator
+        uses: veryl-lang/setup-verilator@v1
+        with:
+          version: 5.048
+      - name: Install Bender
+        uses: pulp-platform/pulp-actions/bender-install@v2.5.1
+      - name: Run Verilator lint
+        run: |
+          bender checkout
+          bender script flist-plus -t riscv-dbg:lint \
+            -t tech_cells_generic:tech_cells_generic_exclude_deprecated \
+            --relative-path > sources.flist
+          verilator --lint-only --timing -Wall \
+            -Wno-PINCONNECTEMPTY \
+            -DCOMMON_CELLS_ASSERTS_OFF \
+            --top-module dm_obi_top .github/verilator.vlt -f sources.flist
