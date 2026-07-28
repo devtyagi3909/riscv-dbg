@@ -94,9 +94,9 @@ module tb_top_verilator #(
 
     // irq signals (not used)
     logic                        irq;
-    logic [0:4]                  irq_id_in;
+    logic [4:0]                  irq_id_in;
     logic                        irq_ack;
-    logic [0:4]                  irq_id_out;
+    logic [4:0]                  irq_id_out;
 
     // make jtag bridge work
     assign sim_jtag_enable = JTAG_BOOT;
