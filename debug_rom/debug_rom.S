@@ -41,6 +41,7 @@ _entry:
         // into the Abstract Data or Program Buffer registers.
         fence
         csrw CSR_DSCRATCH0, s0       // Save s0 to allow signaling MHARTID
+        nop
 #ifdef SND_SCRATCH
         csrw CSR_DSCRATCH1, a0       // Save a0 to allow loading arbitrary DM base
         auipc a0, 0                  // Get PC
@@ -82,6 +83,7 @@ _exception:
         srli a0, a0, 12              // And throw away lower 12 bits to get the DM base
         slli a0, a0, 12
         sw   zero, EXCEPTION(a0)     // Let debug module know you got an exception.
+        fence
         // It is safe to always restore the scratch registers here as they must
         // have been saved on debug entry. Restoring them here avoids issues
         // with registers being overwritten by exceptions occuring during
@@ -89,6 +91,7 @@ _exception:
         csrr a0, CSR_DSCRATCH1       // Restore a0 here
 #else
         sw   zero, EXCEPTION(zero)     // Let debug module know you got an exception.
+        fence
 #endif
         csrr s0, CSR_DSCRATCH0       // Restore s0 here
         ebreak
@@ -108,9 +111,11 @@ _resume:
         csrr s0, CSR_MHARTID
 #ifdef SND_SCRATCH
         sw   s0, RESUMING(a0)   // When Debug Module sees this write, the RESUME flag is reset.
+        fence
         csrr a0, CSR_DSCRATCH1  // Restore a0 here
 #else
         sw   s0, RESUMING(zero)   // When Debug Module sees this write, the RESUME flag is reset.
+        fence
 #endif
         csrr s0, CSR_DSCRATCH0  // Restore s0 here
         dret
