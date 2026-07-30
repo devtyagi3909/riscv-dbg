@@ -51,3 +51,7 @@ sources:
   - target: dm_mem_test
     files:
     - tb/dm_mem/tb_dm_mem.sv
+
+  - target: multihart_resume_test
+    files:
+    - tb/dm_top/tb_dm_top_multihart_resume.sv
