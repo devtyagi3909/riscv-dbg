@@ -69,7 +69,7 @@ module tb_dm_mem #(
     .hartsel_i            ( 20'(HartSel)            ),
     .haltreq_i            ( '0                     ),
     .resumereq_i          ( '0                     ),
-    .clear_resumeack_i    ( 1'b0                   ),
+    .clear_resumeack_i    ( '0                     ),
     .halted_o             ( halted                 ),
     .resuming_o           (                        ),
     .progbuf_i            ( progbuf                ),

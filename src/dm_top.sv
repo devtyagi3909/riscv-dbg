@@ -84,7 +84,7 @@ module dm_top #(
   logic [NrHarts-1:0]               resumeack;
   logic [NrHarts-1:0]               haltreq;
   logic [NrHarts-1:0]               resumereq;
-  logic                             clear_resumeack;
+  logic [NrHarts-1:0]               clear_resumeack;
   logic                             cmd_valid;
   dm::command_t                     cmd;
 
