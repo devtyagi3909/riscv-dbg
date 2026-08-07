@@ -17,8 +17,8 @@ debugging.
 ## Features
 The following features are currently supported
 
-* Parametrizable buswidth for `XLEN=32` `XLEN=64` cores
-* Accessing registers over abstract command
+* Parametrizable 32- or 64-bit debug-module bus width, independent of hart XLEN
+* Accessing 32- or 64-bit hart registers over abstract commands
 * Program buffer
 * System bus access (only `XLEN`)
 * DTM with JTAG interface

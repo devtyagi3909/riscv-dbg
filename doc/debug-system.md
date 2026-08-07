@@ -132,6 +132,7 @@ The debug system can be configured at synthesis time through parameters.
 NrHarts            | 1..2^20          | 1           | Number of connected harts
 BusWidth           | 32, 64           | 32          | Bus width (for debug memory and SBA busses)
 SelectableHarts    |                  | 1           | Bitmask to select physically available harts for systems that don't use hart numbers in a contiguous fashion.
+MaxRegisterAccessWidth | 32, 64       | BusWidth    | Maximum Access Register abstract-command width supported by the connected harts, independent of the debug-memory bus width. For heterogeneous systems, set this to the maximum XLEN among the connected harts.
 
 In addition to these parameters, additional configuration is provided through top-level signals, which are expected to be set to a fixed value at synthesis time.
 

@@ -49,6 +49,6 @@ jobs:
           bender --version
           riscv64-unknown-elf-gcc --version
           z3 --version
-      - name: Run JTAG and compliance regressions
+      - name: Run Verilator regressions
         shell: bash
         run: make -C ci -j2 NUM_JOBS=2 all

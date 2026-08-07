@@ -87,7 +87,11 @@ jobs:
       - name: Run Ruff
         run: uvx --from ruff==0.16.0 ruff check debug_rom/gen_rom.py tb/veri-run-openocd.py
       - name: Run tclint
-        run: uvx --from tclint==0.4.2 tclint tb/vsim_batch.tcl tb/vsim_gui.tcl
+        run: |
+          uvx --from tclint==0.4.2 tclint \
+            tb/dm_mem/test_access_widths_vsim.tcl \
+            tb/vsim_batch.tcl \
+            tb/vsim_gui.tcl
 
   verilator:
     name: Verilator lint

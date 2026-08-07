@@ -25,7 +25,9 @@ module dm_top #(
   // that don't use hart numbers in a contiguous fashion.
   parameter logic [NrHarts-1:0] SelectableHarts  = {NrHarts{1'b1}},
   // toggle new behavior to drive master_be_o during a read
-  parameter bit                 ReadByteEnable   = 1
+  parameter bit                 ReadByteEnable         = 1,
+  // Maximum width supported by Access Register commands; must be 32 or 64.
+  parameter int unsigned        MaxRegisterAccessWidth = BusWidth
 ) (
   input  logic                  clk_i,       // clock
   // asynchronous reset active low, connect PoR here, not the system reset
@@ -204,10 +206,11 @@ module dm_top #(
   );
 
   dm_mem #(
-    .NrHarts(NrHarts),
-    .BusWidth(BusWidth),
-    .SelectableHarts(SelectableHarts),
-    .DmBaseAddress(DmBaseAddress)
+    .NrHarts                ( NrHarts                ),
+    .BusWidth               ( BusWidth               ),
+    .SelectableHarts        ( SelectableHarts        ),
+    .DmBaseAddress          ( DmBaseAddress          ),
+    .MaxRegisterAccessWidth ( MaxRegisterAccessWidth )
   ) i_dm_mem (
     .clk_i,
     .rst_ni,
