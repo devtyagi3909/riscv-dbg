@@ -119,7 +119,7 @@ module tb_dm_top_multihart_resume #(
     @(posedge clk);
   endtask
 
-  task automatic expect_dmcontrol_resumereq_zero;
+  task automatic expect_dmcontrol_write_only_fields_zero;
     if (clk !== 1'b0) begin
       @(negedge clk);
     end
@@ -133,8 +133,8 @@ module tb_dm_top_multihart_resume #(
     dmi_req_valid = 1'b0;
     #1ns;
     if (!dmi_resp_valid || dmi_resp.resp != dm::DTM_SUCCESS ||
-        dmi_resp.data[30] !== 1'b0) begin
-      $fatal(1, "DMControl resumereq is not read-zero (data=%08x)", dmi_resp.data);
+        dmi_resp.data[31:30] !== 2'b00) begin
+      $fatal(1, "DMControl haltreq/resumereq are not read-zero (data=%08x)", dmi_resp.data);
     end
     dmi_req.op = dm::DTM_WRITE;
     @(posedge clk);
@@ -287,6 +287,10 @@ module tb_dm_top_multihart_resume #(
       write_dmcontrol(0, 1'b1, 1'b0, 1'b1);
       expect_resume_request(0, 1'b0);
       expect_resume_ack(0, 1'b1);
+      expect_dmcontrol_write_only_fields_zero();
+      if (dut.haltreq[0] !== 1'b1) begin
+        $fatal(1, "DMControl read changed the active halt request");
+      end
       write_dmcontrol(0, 1'b1, 1'b0);
       expect_resume_request(0, 1'b1);
       expect_resume_ack(HartTwo, 1'b1);
@@ -299,7 +303,7 @@ module tb_dm_top_multihart_resume #(
       expect_resume_ack(HartTwo, 1'b0);
       // A non-requesting write changes hartsel but cannot cancel either action
       write_dmcontrol(20'(HartTwo), 1'b0, 1'b0);
-      expect_dmcontrol_resumereq_zero();
+      expect_dmcontrol_write_only_fields_zero();
       expect_resume_flag(0, 1'b1);
       expect_resume_flag(HartTwo, 1'b1);
 
