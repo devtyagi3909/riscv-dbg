@@ -178,7 +178,7 @@ module dm_csrs #(
   logic [63:0]        sbdata_d, sbdata_q;
 
   logic [NrHarts-1:0] havereset_d, havereset_q;
-  logic [NrHarts-1:0] resumereq_d, resumereq_q;
+  logic [NrHarts-1:0] resume_pending_d, resume_pending_q;
   // program buffer
   logic [dm::ProgBufSize-1:0][31:0] progbuf_d, progbuf_q;
   logic [dm::DataCount-1:0][31:0] data_d, data_d_dmi, data_q;
@@ -307,9 +307,9 @@ module dm_csrs #(
     dmcontrol_read      = dmcontrol_q;
     dmcontrol_read.haltreq   = 1'b0;
     dmcontrol_read.resumereq = 1'b0;
-    resumereq_d         = resumereq_q;
+    resume_pending_d     = resume_pending_q;
     // Acknowledgements retire only the corresponding pending actions
-    resumereq_d        &= ~resumeack_i;
+    resume_pending_d    &= ~resumeack_i;
     cmderr_d            = cmderr_q;
     command_d           = command_q;
     progbuf_d           = progbuf_q;
@@ -585,13 +585,14 @@ module dm_csrs #(
     if (dmcontrol_write_resumereq && dmcontrol_write_hart_valid &&
         SelectableHarts[dmcontrol_write_hart] &&
         halted_aligned[dmcontrol_write_hart] &&
+        !unavailable_aligned[dmcontrol_write_hart] &&
         !dmcontrol_write_haltreq) begin
-      resumereq_d[dmcontrol_write_hart] = 1'b1;
+      resume_pending_d[dmcontrol_write_hart] = 1'b1;
     end
 
     // Deactivating the debug module clears all pending actions
     if (dmcontrol_write_accepted && !dmcontrol_write_dmactive) begin
-      resumereq_d = '0;
+      resume_pending_d = '0;
     end
     // WARL behavior of hartsel, depending on NrHarts.
     // If NrHarts = 1 this is just masked to all-zeros.
@@ -614,7 +615,7 @@ module dm_csrs #(
   always_comb begin : p_outmux
     // default assignment
     haltreq_o = '0;
-    resumereq_o = resumereq_q;
+    resumereq_o = resume_pending_q;
     if (selected_hart_valid) begin
       haltreq_o[selected_hart]   = dmcontrol_q.haltreq;
     end
@@ -664,7 +665,7 @@ module dm_csrs #(
       sbaddr_q       <= '0;
       sbdata_q       <= '0;
       havereset_q    <= '1;
-      resumereq_q    <= '0;
+      resume_pending_q <= '0;
     end else begin
       havereset_q    <= SelectableHarts & havereset_d;
       // synchronous re-set of debug module, active-low, except for dmactive
@@ -681,7 +682,7 @@ module dm_csrs #(
         dmcontrol_q.setresethaltreq  <= '0;
         dmcontrol_q.clrresethaltreq  <= '0;
         dmcontrol_q.ndmreset         <= '0;
-        resumereq_q                  <= '0;
+        resume_pending_q             <= '0;
         // this is the only write-able bit during reset
         dmcontrol_q.dmactive         <= dmcontrol_d.dmactive;
         cmderr_q                     <= dm::CmdErrNone;
@@ -695,7 +696,7 @@ module dm_csrs #(
         sbdata_q                     <= '0;
       end else begin
         dmcontrol_q                  <= dmcontrol_d;
-        resumereq_q                  <= SelectableHarts & resumereq_d;
+        resume_pending_q             <= SelectableHarts & resume_pending_d;
         cmderr_q                     <= cmderr_d;
         command_q                    <= command_d;
         cmd_valid_q                  <= cmd_valid_d;

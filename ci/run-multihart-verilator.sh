@@ -22,3 +22,11 @@ readonly BUILD_DIR="${MULTIHART_BUILD_DIR:-${ROOT}/build/multihart-verilator}"
 "${ROOT}/ci/run-single-top-verilator.sh" \
   "${BUILD_DIR}/four-hart" tb_dm_top_multihart_resume \
   -GNrHarts=4 -GSelectableHarts="4'b1111"
+
+"${ROOT}/ci/run-single-top-verilator.sh" \
+  "${BUILD_DIR}/five-hart" tb_dm_top_multihart_resume \
+  -GNrHarts=5 -GBusWidth=32 -GSelectableHarts="5'b11111"
+
+"${ROOT}/ci/run-single-top-verilator.sh" \
+  "${BUILD_DIR}/nine-hart" tb_dm_top_multihart_resume \
+  -GNrHarts=9 -GBusWidth=64 -GSelectableHarts="9'b111111111"

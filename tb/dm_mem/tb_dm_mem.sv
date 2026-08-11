@@ -64,6 +64,7 @@ module tb_dm_mem #(
   ) i_dm_mem (
     .clk_i                ( clk                    ),
     .rst_ni               ( rst_n                  ),
+    .dmactive_i           ( 1'b1                   ),
     .debug_req_o          (                        ),
     .ndmreset_i           ( 1'b0                   ),
     .hartsel_i            ( 20'(HartSel)            ),

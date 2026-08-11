@@ -214,6 +214,7 @@ module dm_top #(
   ) i_dm_mem (
     .clk_i,
     .rst_ni,
+    .dmactive_i              ( dmactive_o            ),
     .debug_req_o,
     .ndmreset_i              ( ndmreset              ),
     .hartsel_i               ( hartsel               ),

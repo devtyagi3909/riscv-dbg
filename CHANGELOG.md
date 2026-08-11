@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 ## Unreleased
 
 ### Fixed
-- Keep accepted resume requests pending per hart until acknowledged and clear resumeack only for
-  the request target; widen the internal dm_csrs/dm_mem clear_resumeack connection from scalar to
-  a per-hart vector.
+- Keep accepted resume requests pending per hart until acknowledged, clear resumeack only for the
+  request target, and retain resumeack across ndmreset; widen the internal dm_csrs/dm_mem
+  clear_resumeack connection from scalar to a per-hart vector and add a dmactive reset input to
+  dm_mem for resumeack state.
+- Reject out-of-range hart IDs reported through debug memory before updating per-hart state.
 - Make the write-only `dmcontrol.haltreq` field read as zero (#161).
 
 ## [0.10.1] - 2026-08-07
