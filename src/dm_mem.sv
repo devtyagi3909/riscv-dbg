@@ -150,7 +150,8 @@ module dm_mem #(
     unique case (state_q)
       Idle: begin
         cmdbusy_o = 1'b0;
-        if (cmd_valid_i && halted_q_aligned[hartsel] && !unsupported_command) begin
+        if (cmd_valid_i && halted_q_aligned[hartsel] &&
+            !resumereq_aligned[hartsel] && !unsupported_command) begin
           // give the go signal
           state_d = Go;
         end else if (cmd_valid_i) begin

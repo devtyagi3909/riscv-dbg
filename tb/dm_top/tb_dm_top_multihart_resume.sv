@@ -155,7 +155,10 @@ module tb_dm_top_multihart_resume #(
     @(posedge clk);
   endtask
 
-  task automatic execute_access_register_command(input int unsigned command_hart);
+  task automatic execute_access_register_command(
+    input int unsigned command_hart,
+    input bit          expect_resume_rejection = 1'b0
+  );
     logic [BusWidth-1:0] flags_data;
     logic [31:0] abstractcs_data;
     dm::abstractcs_t abstractcs;
@@ -175,6 +178,20 @@ module tb_dm_top_multihart_resume #(
 
     read_dmi(8'(dm::AbstractCS), abstractcs_data);
     abstractcs = dm::abstractcs_t'(abstractcs_data);
+    if (expect_resume_rejection) begin
+      if (abstractcs.busy || abstractcs.cmderr != dm::CmdErrorHaltResume) begin
+        $fatal(1, "pending resume command was not rejected (busy=%0b cmderr=%0d)",
+               abstractcs.busy, abstractcs.cmderr);
+      end
+      read_debug_memory(12'(12'h400 + command_hart), flags_data);
+      if (flags_data[(command_hart % HartsPerFlagWord) * 8 +: 2] !== 2'b10) begin
+        $fatal(1, "pending resume command changed flags[%0d] (data=%08x)",
+               command_hart, flags_data);
+      end
+      expect_resume_request(command_hart, 1'b1);
+      write_dmi(8'(dm::AbstractCS), 32'h0000_0700);
+      return;
+    end
     if (!abstractcs.busy) begin
       $fatal(1, "access register command for hart %0d was lost while a resume was pending",
              command_hart);
@@ -470,6 +487,9 @@ module tb_dm_top_multihart_resume #(
       write_dmcontrol(0, 1'b1, 1'b0);
       expect_resume_request(0, 1'b1);
       expect_resume_ack(HartTwo, 1'b1);
+
+      // A pending resume must reject a command for the same hart
+      execute_access_register_command(0, 1'b1);
 
       // A pending resume for hart 0 must not block a command for hart 2
       write_debug_memory(HaltedAddr, HartTwo);
