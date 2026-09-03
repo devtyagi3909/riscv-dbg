@@ -84,7 +84,7 @@ module dm_top #(
   logic [NrHarts-1:0]               resumeack;
   logic [NrHarts-1:0]               haltreq;
   logic [NrHarts-1:0]               resumereq;
-  logic                             clear_resumeack;
+  logic [NrHarts-1:0]               clear_resumeack;
   logic                             cmd_valid;
   dm::command_t                     cmd;
 
@@ -214,6 +214,7 @@ module dm_top #(
   ) i_dm_mem (
     .clk_i,
     .rst_ni,
+    .dmactive_i              ( dmactive_o            ),
     .debug_req_o,
     .ndmreset_i              ( ndmreset              ),
     .hartsel_i               ( hartsel               ),

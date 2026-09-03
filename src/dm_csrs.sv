@@ -47,7 +47,8 @@ module dm_csrs #(
   output logic [19:0]                       hartsel_o,       // hartselect to ctrl module
   output logic [NrHarts-1:0]                haltreq_o,       // request to halt a hart
   output logic [NrHarts-1:0]                resumereq_o,     // request hart to resume
-  output logic                              clear_resumeack_o,
+  // Clears stale acknowledgements before issuing new resume requests
+  output logic [NrHarts-1:0]                clear_resumeack_o,
 
   output logic                              cmd_valid_o,       // debugger writing to cmd field
   output dm::command_t                      cmd_o,             // abstract command
@@ -85,6 +86,8 @@ module dm_csrs #(
   localparam int unsigned DataIndexWidth = $clog2(dm::DataCount);
   localparam int unsigned HartSelLen = (NrHarts == 1) ? 1 : $clog2(NrHarts);
   localparam int unsigned NrHartsAligned = 2**HartSelLen;
+  // Keep only the implemented WARL hart-select bits
+  localparam logic [19:0] HartSelMask = 20'((2**$clog2(NrHarts)) - 1);
 
   dm::dtm_op_e dtm_op;
   assign dtm_op = dm::dtm_op_e'(dmi_req_i.op);
@@ -164,7 +167,7 @@ module dm_csrs #(
 
 
   dm::dmstatus_t      dmstatus;
-  dm::dmcontrol_t     dmcontrol_d, dmcontrol_q;
+  dm::dmcontrol_t     dmcontrol_d, dmcontrol_q, dmcontrol_read;
   dm::abstractcs_t    abstractcs;
   dm::cmderr_e        cmderr_d, cmderr_q;
   dm::command_t       command_d, command_q;
@@ -175,6 +178,7 @@ module dm_csrs #(
   logic [63:0]        sbdata_d, sbdata_q;
 
   logic [NrHarts-1:0] havereset_d, havereset_q;
+  logic [NrHarts-1:0] resume_pending_d, resume_pending_q;
   // program buffer
   logic [dm::ProgBufSize-1:0][31:0] progbuf_d, progbuf_q;
   logic [dm::DataCount-1:0][31:0] data_d, data_d_dmi, data_q;
@@ -218,11 +222,39 @@ module dm_csrs #(
   dm::sbcs_t sbcs;
   logic [3:0] autoexecdata_idx; // 0 == Data0 ... 11 == Data11
 
+  // Decode immediate write effects independently of stored CSR state
+  logic [19:0]           dmcontrol_write_hartsel;
+  logic [HartSelLen-1:0] dmcontrol_write_hart;
+  logic                  dmcontrol_write_hart_valid;
+  logic                  dmcontrol_write_accepted;
+  logic                  dmcontrol_write_resumereq;
+  logic                  dmcontrol_write_haltreq;
+  logic                  dmcontrol_write_dmactive;
+
   // Get the data index, i.e. 0 for dm::Data0 up to 11 for dm::Data11
   assign dm_csr_addr = dm::dm_csr_e'({1'b0, dmi_req_i.addr});
   // Xilinx Vivado 2020.1 does not allow subtraction of two enums; do the subtraction with logic
   // types instead.
   assign autoexecdata_idx = 4'({dm_csr_addr} - {dm::Data0});
+
+  assign dmcontrol_write_hartsel = {dmi_req_i.data[15:6], dmi_req_i.data[25:16]}
+                                   & HartSelMask;
+  assign dmcontrol_write_hart = dmcontrol_write_hartsel[HartSelLen-1:0];
+  assign dmcontrol_write_hart_valid = dmcontrol_write_hartsel <= 20'(NrHarts - 1);
+  assign dmcontrol_write_accepted = dmi_req_ready_o && dmi_req_valid_i &&
+                                    dtm_op == dm::DTM_WRITE &&
+                                    dm_csr_addr == dm::DMControl;
+  assign dmcontrol_write_resumereq = dmcontrol_write_accepted && dmi_req_i.data[30];
+  assign dmcontrol_write_haltreq = dmi_req_i.data[31];
+  assign dmcontrol_write_dmactive = dmi_req_i.data[0];
+
+  always_comb begin : p_clear_resumeack
+    clear_resumeack_o = '0;
+    if (dmcontrol_write_resumereq && !dmcontrol_write_haltreq &&
+        dmcontrol_write_hart_valid && SelectableHarts[dmcontrol_write_hart]) begin
+      clear_resumeack_o[dmcontrol_write_hart] = 1'b1;
+    end
+  end
 
   always_comb (*xprop_off *) begin : csr_read_write
     // --------------------
@@ -272,6 +304,12 @@ module dm_csrs #(
     // default assignments
     havereset_d         = havereset_q;
     dmcontrol_d         = dmcontrol_q;
+    dmcontrol_read      = dmcontrol_q;
+    dmcontrol_read.haltreq   = 1'b0;
+    dmcontrol_read.resumereq = 1'b0;
+    resume_pending_d     = resume_pending_q;
+    // Acknowledgements retire only the corresponding pending actions
+    resume_pending_d    &= ~resumeack_i;
     cmderr_d            = cmderr_q;
     command_d           = command_q;
     progbuf_d           = progbuf_q;
@@ -286,7 +324,6 @@ module dm_csrs #(
     sbaddress_write_valid_o = 1'b0;
     sbdata_read_valid_o     = 1'b0;
     sbdata_write_valid_o    = 1'b0;
-    clear_resumeack_o       = 1'b0;
 
     // helper variables
     sbcs = '0;
@@ -307,7 +344,7 @@ module dm_csrs #(
             end
           end
         end
-        dm::DMControl:    resp_queue_inp.data = dmcontrol_q;
+        dm::DMControl:    resp_queue_inp.data = dmcontrol_read;
         dm::DMStatus:     resp_queue_inp.data = dmstatus;
         dm::Hartinfo:     resp_queue_inp.data = hartinfo_aligned[selected_hart];
         dm::AbstractCS:   resp_queue_inp.data = abstractcs;
@@ -540,15 +577,26 @@ module dm_csrs #(
     dmcontrol_d.zero0           = '0;
     // Non-writeable, clear only
     dmcontrol_d.ackhavereset    = 1'b0;
-    if (!dmcontrol_q.resumereq && dmcontrol_d.resumereq) begin
-      clear_resumeack_o = 1'b1;
+    // resumereq is W1/read-zero and is represented by the per-hart pending vector
+    dmcontrol_d.resumereq = 1'b0;
+
+    // Set a request only for an effective, selectable hart that is halted when
+    // the write is accepted. A new request wins over a same-cycle acknowledgement
+    if (dmcontrol_write_resumereq && dmcontrol_write_hart_valid &&
+        SelectableHarts[dmcontrol_write_hart] &&
+        halted_aligned[dmcontrol_write_hart] &&
+        !unavailable_aligned[dmcontrol_write_hart] &&
+        !dmcontrol_write_haltreq) begin
+      resume_pending_d[dmcontrol_write_hart] = 1'b1;
     end
-    if (dmcontrol_q.resumereq && resumeack_i) begin
-      dmcontrol_d.resumereq = 1'b0;
+
+    // Deactivating the debug module clears all pending actions
+    if (dmcontrol_write_accepted && !dmcontrol_write_dmactive) begin
+      resume_pending_d = '0;
     end
     // WARL behavior of hartsel, depending on NrHarts.
     // If NrHarts = 1 this is just masked to all-zeros.
-    {dmcontrol_d.hartselhi, dmcontrol_d.hartsello} &= (2**$clog2(NrHarts))-1;
+    {dmcontrol_d.hartselhi, dmcontrol_d.hartsello} &= HartSelMask;
     // static values for dcsr
     sbcs_d.sbversion            = 3'd1;
     sbcs_d.sbbusy               = sbbusy_i;
@@ -567,10 +615,9 @@ module dm_csrs #(
   always_comb begin : p_outmux
     // default assignment
     haltreq_o = '0;
-    resumereq_o = '0;
+    resumereq_o = resume_pending_q;
     if (selected_hart_valid) begin
       haltreq_o[selected_hart]   = dmcontrol_q.haltreq;
-      resumereq_o[selected_hart] = dmcontrol_q.resumereq;
     end
   end
 
@@ -618,6 +665,7 @@ module dm_csrs #(
       sbaddr_q       <= '0;
       sbdata_q       <= '0;
       havereset_q    <= '1;
+      resume_pending_q <= '0;
     end else begin
       havereset_q    <= SelectableHarts & havereset_d;
       // synchronous re-set of debug module, active-low, except for dmactive
@@ -634,6 +682,7 @@ module dm_csrs #(
         dmcontrol_q.setresethaltreq  <= '0;
         dmcontrol_q.clrresethaltreq  <= '0;
         dmcontrol_q.ndmreset         <= '0;
+        resume_pending_q             <= '0;
         // this is the only write-able bit during reset
         dmcontrol_q.dmactive         <= dmcontrol_d.dmactive;
         cmderr_q                     <= dm::CmdErrNone;
@@ -647,6 +696,7 @@ module dm_csrs #(
         sbdata_q                     <= '0;
       end else begin
         dmcontrol_q                  <= dmcontrol_d;
+        resume_pending_q             <= SelectableHarts & resume_pending_d;
         cmderr_q                     <= cmderr_d;
         command_q                    <= command_d;
         cmd_valid_q                  <= cmd_valid_d;

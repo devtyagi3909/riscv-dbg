@@ -88,7 +88,7 @@ Accessing a non-implemented register will return `0`.
 
 **Field**       | **Access** | **(Reset) Value** | **Comment**
 --------------- | ---------- | ----------------- | -------------------------------------------------------------------------------------------------------------
-haltreq         | WARZ
+haltreq         | W
 resumereq       | W1
 hartreset       | WARL       | 0                 | Not implemented, reads constant 0
 ackhavereset    | W1

@@ -26,6 +26,7 @@ module dm_mem #(
 ) (
   input  logic                             clk_i,       // Clock
   input  logic                             rst_ni,      // debug module reset
+  input  logic                             dmactive_i,  // debug module is active
 
   output logic [NrHarts-1:0]               debug_req_o,
   input  logic                             ndmreset_i,
@@ -33,7 +34,8 @@ module dm_mem #(
   // from Ctrl and Status register
   input  logic [NrHarts-1:0]               haltreq_i,
   input  logic [NrHarts-1:0]               resumereq_i,
-  input  logic                             clear_resumeack_i,
+  // Clears stale acknowledgements before new resume requests
+  input  logic [NrHarts-1:0]               clear_resumeack_i,
 
   // state bits
   output logic [NrHarts-1:0]               halted_o,    // hart acknowledge halt
@@ -94,7 +96,7 @@ module dm_mem #(
   logic [7:0][63:0]   abstract_cmd;
   logic [NrHarts-1:0] halted_d, halted_q;
   logic [NrHarts-1:0] resuming_d, resuming_q;
-  logic               resume, go, going;
+  logic               go, going;
 
   logic exception;
   logic unsupported_command;
@@ -104,23 +106,21 @@ module dm_mem #(
   logic        word_enable32_q;
 
   logic [HartSelLen-1:0] hartsel, wdata_hartsel;
-  logic                  hartsel_valid, wdata_hartsel_valid;
+  logic                  wdata_hartsel_valid;
+  logic [DbgAddressBits-1:0] flags_hart_idx;
+  logic [HartSelLen-1:0] flags_hart;
 
   assign hartsel             = hartsel_i[HartSelLen-1:0];
   assign wdata_hartsel       = wdata_i[HartSelLen-1:0];
-  assign hartsel_valid       = hartsel <= HartSelLen'(NrHarts - 1);
-  assign wdata_hartsel_valid = wdata_hartsel <= HartSelLen'(NrHarts - 1);
+  assign wdata_hartsel_valid = wdata_i[31:0] <= 32'(NrHarts - 1);
+  assign flags_hart_idx      = addr_i[DbgAddressBits-1:0] - FlagsBaseAddr;
+  assign flags_hart          = HartSelLen'(flags_hart_idx);
 
-  logic [NrHartsAligned-1:0] resumereq_aligned, haltreq_aligned,
-                             halted_q_aligned, halted_aligned,
-                             resumereq_wdata_aligned, resuming_q_aligned;
+  logic [NrHartsAligned-1:0] resumereq_aligned, halted_q_aligned, halted_aligned;
 
   assign resumereq_aligned       = NrHartsAligned'(resumereq_i);
-  assign haltreq_aligned         = NrHartsAligned'(haltreq_i);
-  assign resumereq_wdata_aligned = NrHartsAligned'(resumereq_i);
 
   assign halted_q_aligned        = NrHartsAligned'(halted_q);
-  assign resuming_q_aligned      = NrHartsAligned'(resuming_q);
 
   // distinguish whether we need to forward data from the ROM or the FSM
   // latch the address for this
@@ -136,7 +136,7 @@ module dm_mem #(
   // reshape progbuf
   assign progbuf = progbuf_i;
 
-  typedef enum logic [1:0] { Idle, Go, Resume, CmdExecuting } state_e;
+  typedef enum logic [1:0] { Idle, Go, CmdExecuting } state_e;
   state_e state_d, state_q;
 
   // hart ctrl queue
@@ -145,25 +145,19 @@ module dm_mem #(
     cmderror_o       = dm::CmdErrNone;
     state_d          = state_q;
     go               = 1'b0;
-    resume           = 1'b0;
     cmdbusy_o        = 1'b1;
 
     unique case (state_q)
       Idle: begin
         cmdbusy_o = 1'b0;
-        if (cmd_valid_i && halted_q_aligned[hartsel] && !unsupported_command) begin
+        if (cmd_valid_i && halted_q_aligned[hartsel] &&
+            !resumereq_aligned[hartsel] && !unsupported_command) begin
           // give the go signal
           state_d = Go;
         end else if (cmd_valid_i) begin
           // hart must be halted for all requests
           cmderror_valid_o = 1'b1;
           cmderror_o = dm::CmdErrorHaltResume;
-        end
-        // CSRs want to resume, the request is ignored when the hart is
-        // requested to halt or it didn't clear the resuming_q bit before
-        if (resumereq_aligned[hartsel] && !resuming_q_aligned[hartsel] &&
-            !haltreq_aligned[hartsel] && halted_q_aligned[hartsel]) begin
-          state_d = Resume;
         end
       end
 
@@ -174,14 +168,6 @@ module dm_mem #(
         // the thread is now executing the command, track its state
         if (going) begin
             state_d = CmdExecuting;
-        end
-      end
-
-      Resume: begin
-        cmdbusy_o = 1'b1;
-        resume = 1'b1;
-        if (resuming_q_aligned[hartsel]) begin
-          state_d = Idle;
         end
       end
 
@@ -213,7 +199,6 @@ module dm_mem #(
       // Clear state of hart and its control signals when it is being reset.
       state_d = Idle;
       go      = 1'b0;
-      resume  = 1'b0;
     end
   end
 
@@ -260,20 +245,18 @@ module dm_mem #(
     data_o = data_bits;
   end
 
-  // Track resume acknowledgements. Memory writes take precedence over a clear request.
+  // Track resume acknowledgements with hart writes taking priority over clear requests
   always_comb begin : p_resuming
     resuming_d = resuming_q;
 
-    if (clear_resumeack_i && hartsel_valid) begin
-      resuming_d[hartsel] = 1'b0;
-    end
+    resuming_d &= ~clear_resumeack_i;
 
     if (req_i && we_i && addr_i[DbgAddressBits-1:0] == ResumingAddr &&
         wdata_hartsel_valid) begin
       resuming_d[wdata_hartsel] = 1'b1;
     end
 
-    if (ndmreset_i) begin
+    if (!dmactive_i) begin
       resuming_d = '0;
     end
   end
@@ -295,8 +278,8 @@ module dm_mem #(
       if (we_i) begin
         unique case (addr_i[DbgAddressBits-1:0]) inside
           HaltedAddr: begin
-            halted_aligned[wdata_hartsel] = 1'b1;
             if (wdata_hartsel_valid) begin
+              halted_aligned[wdata_hartsel] = 1'b1;
               halted_d[wdata_hartsel] = 1'b1;
             end
           end
@@ -320,7 +303,7 @@ module dm_mem #(
           // variable ROM content
           WhereToAddr: begin
             // variable jump to abstract cmd, program_buffer or resume
-            if (resumereq_wdata_aligned[wdata_hartsel]) begin
+            if (wdata_hartsel_valid && resumereq_aligned[wdata_hartsel]) begin
               rdata_d = {32'b0, dm::jal('0, 21'(dm::ResumeAddress[11:0])-21'(WhereToAddr))};
             end
 
@@ -362,10 +345,13 @@ module dm_mem #(
           end
           // harts are polling for flags here
           [FlagsBaseAddr:FlagsEndAddr]: begin
-            // release the corresponding hart
-            if (({addr_i[DbgAddressBits-1:3], 3'b0} - FlagsBaseAddr[DbgAddressBits-1:0]) ==
-              (DbgAddressBits'(hartsel) & {{(DbgAddressBits-3){1'b1}}, 3'b0})) begin
-              rdata[DbgAddressBits'(hartsel) & DbgAddressBits'(3'b111)] = {6'b0, resume, go};
+            // Route resume by flag address and go to the active command hart
+            if (20'(flags_hart_idx) <= 20'(NrHarts - 1)) begin
+              rdata[addr_i[2:0]] = {
+                6'b0,
+                resumereq_aligned[flags_hart] && dmactive_i && !ndmreset_i,
+                go && dmactive_i && flags_hart == hartsel
+              };
             end
             rdata_d = rdata;
           end
@@ -566,8 +552,8 @@ module dm_mem #(
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      halted_q   <= 1'b0;
-      resuming_q <= 1'b0;
+      halted_q   <= '0;
+      resuming_q <= '0;
     end else begin
       halted_q   <= SelectableHarts & halted_d;
       resuming_q <= SelectableHarts & resuming_d;
